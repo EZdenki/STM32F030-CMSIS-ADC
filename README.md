@@ -12,6 +12,7 @@ The basic steps to set up and read the ADC are as follows. See **main.c** for de
 
 ## Wiring
 + Connect an LED with a 1K current limiting resistor between GPIO A5 (pin 11) and ground.
-* Connect the outside terminals of a potentiometer (at least 1K) to VCC and GND. The center tap of the potentiometer goes to GPIO A4 (pin 10).
-+ The RX line from the USB serial dongle is connected to USART1 TX (pin 8). In order see the serial output, a serial termainal must be used. See
++ Connect VDDA (pin 5 on the STM32F030F4) to VCC.
++ Connect the outside terminals of a potentiometer (at least 1K) to VCC and GND. The center tap of the potentiometer goes to GPIO&nbsp;A4 (pin&nbsp;10).
++ Connect the RX line from the USB serial dongle to USART1 TX (pin 8), and connect the GND wire of the USB serial dongle to GND on the circuit. In order see the serial output, a serial termainal must be used. See
 [STM32F030-CMSIS-USART-lib](https://github.com/ezdenki/STM32F030-CMSIS-USART-lib) for details.
