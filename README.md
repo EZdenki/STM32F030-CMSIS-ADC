@@ -3,7 +3,7 @@ This project contains the bare minimum code required to demonstrate how to read 
 outputs the ADC value out to a serial terminal via the USART if a USB serial dongle is used.<br>
 
 ## Software Setup
-The basic steps to set up and read the ADC are as follows. See **main.c** for details.
+The basic steps to set up and read the ADC are as follows. (See **main.c** for details.)
 + Enable the ADC and GPIO clocks on RCC, and set up the GPIO as an ADC input.
 + Perform calibration of the ADC.
 + Enable the ADC peripheral.
