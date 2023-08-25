@@ -1,124 +1,149 @@
-//  main.c for STM32F103-CMSIS-ADC-test
-//
-//  Minimalist polling ADC conversion example. Also demostrates basic PWM output.
+//  ==========================================================================================
+//  main.c for STM32F103-CMSIS-ADC
+//  ------------------------------------------------------------------------------------------
+//  Demostrates how to set up simple polling ADC conversion on the STM32F103F4xxx.
+//  Set up ADC input on GPIO pin A4 (pin 10) that reads a potentiometer voltage divider.
+//  The output is used to control the blinking rate of an LED. And the value read from the ADC
+//  is also output to the USART TX pin (pin 8). The value can be read on a serial terminal by
+//  hooking up a USB serial dongle and running a serial program such as PuTTY. See the file,
+//  STM32F030-CMSIS-USART-lib.c or https://github.com/EZdenki/STM32F030-CMSIS-USART-lib for
+//  details.
+//  ------------------------------------------------------------------------------------------
+//  https://github.com/EZdenki/STM32F030-CMSIS-ADC-Test
+//  Released under the MIT License
+//  Copyright (c) 2023
 //  Mike Shegedin, EZdenki.com
 //
-//      Version 1.0     14 Aug 2023   Updated core files, cleaned up comments
-//      Version 0.9        Mar 2023   Started
+//    Version 1.0   25 Aug 2023   Added serial USART output
+//    Version 0.9   24 Aug 2023   Started port from STM32F103-CMSIS-ADC-PWM-Example
 //
-//  Set up ADC input on Pin A1 that reads a potentiometer voltage divider.
-//  The output is used to control the duty cycle of a 10 kHz PWM signal output
-//  generated on Timer 2, Channel 1, Pin A0.
+//  Target Devices:
+//    STM32F030F4xx
+//    1K ohm or higher potentiometer (pot)
+//    LED and 1k ohm current limiting resistor
+//    Optional: USB Serial Dongle
+//
+//  ------------------------------------------------------------------------------------------
+//  Hardware Setup
+//
+//                                          STM32F030F4xx
+//                                           .---. .---.
+//                                     BOOT0 |1o  V  20| PA14 / SWCLK
+//                                    OSC_IN |2      19| PA13 / SWDIO
+//                                   OSC_OUT |3      18| PA10
+//          GND -- [10K] -- [BUTTON] -- NRST |4      17| PA9
+//          VCC ----------------------- VDDA |5      16| VCC --------------------- VCC
+//                                       PA0 |6      15| GND --------------------- GND
+//                                       PA1 |7      14| PB1
+//  Serial Dongle RX Line -- USART1 TX / PA2 |8      13| PA7
+//                                       PA3 |9      12| PA
+//                        ,--- ADC_IN4 / PA4 |10     11| PA5 -- [+LED-] -- [1K] -- GND
+//                        |                  '---------'
+//                        |
+//                        |                  ,-----,
+//                        |         VCC --- o|     |  |]
+//                        '---------------- o| POT |==|] 
+//                                  GND --- o|     |  |]
+//                                           '-----'
+//                                          
+//
+//  ==========================================================================================
 
-
-//  Steps to Set Up PWM:
-//  1. Enable TIMER 2 by setting the RCC_APB1ENR_TIM2EN bit in the RCC APB1ENR register.
-//  2. Enable GPIO Port A by setting the RCC_APB2ENR_IOPAEN bit in the RCC APB2ENR register.
-//  3. Set CNF and MODE bits for GPIO Port A, Pin 0 for output, push-pull, alternate function,
-//     2 MHz speed, by setting the appropriate CNF0 and MODE0 bits in the GPIOA CRL register.
-//  4. Set PWM period via the TIM2 ARR register.
-//  5. Set PWM duty cycle via the TIM2 CCR1 register.
-//  6. Set PWM mode 1 by setting the TIM_CCMR1_OC1Mx bits as 110 via the TIM2 CCMR1 register.
-//  7. Enable output on Channel 1 of Timer 2 by setting the TIM_CCER_CC1E bit in the TIM2 CCER
-//     register.
-//  8. Enable the clock counter via the TIM_CR1_CEN bit in the TIM2 CR1 register.
-
-#include "stm32f103xb.h"
-
+#include "stm32f030x6.h"
+#include "STM32F030-CMSIS-USART-lib.c"
+#include <stdlib.h>
 int
 main( void )
 {
 
-  // =========================================
-  // Setup up PWM Output on GPIO A0 (TIM2/CH1)
-  // =========================================
+  USART_init( 115200 );                 // Connect to USART1 (PA2 / pin 8) at this baud rate
+  USART_puts( "USART Connected!\n" );   // Show message to serial terminal
+
+  // -----------------------------------------------------------------------------------------
+  // Enable RCC timer for GPIOA, and ADC, and set up GPIO MODER bits
+  // -----------------------------------------------------------------------------------------
+  RCC->AHBENR  |= RCC_AHBENR_GPIOAEN;
+  RCC->APB2ENR |= RCC_APB2ENR_ADCEN;
+
+  // Set up GPIO Pin A5 as an output for the LED. Do this by setting the MODER5[1:0] bits
+  // to 0b01.
+  GPIOA->MODER |= ( 0b01 << GPIO_MODER_MODER5_Pos );
+                                        
+  // Set up GPIO Pin A4 as an ADC input. Do this by setting the MODER4[1:0] bits to 0b11.
+  GPIOA->MODER |= ( 0b11 << GPIO_MODER_MODER4_Pos );
 
 
-  // ====================
-  // Set up RCC Registers
-  // ====================
-  // Enable TIM2
-  RCC->APB1ENR |= RCC_APB1ENR_TIM2EN;
+  // -----------------------------------------------------------------------------------------
+  // Calibrate ADC (Following Apendix A.7.1 in Reference Manual RM0360)
+  // -----------------------------------------------------------------------------------------
+  
+  // (1) Ensure that ADEN = 0
+  // (2) Clear ADEN by setting ADDIS
+  // (3) Clear DMAEN
+  // (4) Launch the calibration by setting ADCAL
+  // (5) Wait until ADCAL=0
 
-  // Enable GPIO Port A, ADC1
-  RCC->APB2ENR |= RCC_APB2ENR_IOPAEN | RCC_APB2ENR_ADC1EN;
+  // Make sure the ADC is not enabled, and if it is, then disable it.
+  // Note that the ADC can only be enabled by setting the ADC_CR_ADEN bit,
+  // and disabled by setting the ADC_CR_ADEN bit.
+  if ((ADC1->CR & ADC_CR_ADEN) != 0)        // If ADC enabled,
+    ADC1->CR |= ADC_CR_ADDIS;               // then disable it.
 
-  // =====================
-  // Set up GPIO Registers
-  //    PWM Output: A0
-  //    ADC Input:  A1
-  // =====================
-  // Set the CNF and MODE bits for Pin A0 as follows:
-  // Set CNF0[1:0] to 0b10 for Alternate function output, push-pull. Alternate function as
-  // defined by the CNF bits is needed for PWM functionality.
-  // Set MODE0[1:0] to 0b10 for output functionality with a max speed of 2 MHz.
-  // Note that CNF[1] bit is set to 1 by default, and that bit must be cleared!
-  GPIOA->CRL &= ~GPIO_CRL_CNF0_Msk;                       // Clear both CNF bits
-  GPIOA->CRL |= ( GPIO_CRL_CNF0_1 | GPIO_CRL_MODE0_1 );   // Set CNF0[1] and MODE0[1] bits.
+  while ((ADC1->CR & ADC_CR_ADEN) != 0) ;   // Wait for the CR_ADEN bit to be cleared.
 
-  // Clear CNF1[1:0] bits for analog input on pin A1
-  GPIOA->CRL &= ~GPIO_CRL_CNF1_Msk;
+  ADC1->CFGR1 &= ~ADC_CFGR1_DMAEN;          // Disable DMA
+  ADC1->CR |= ADC_CR_ADCAL;                 // Set ADC_CR_ADCAL bit to start calibration
+  while ((ADC1->CR & ADC_CR_ADCAL) != 0) ;  // Wait for bit to be cleared, which indicates
+                                            // calibration is complete.
 
+  // -----------------------------------------------------------------------------------------
+  // Enable ADC (Following Appendix A.7.2 in Reference Manual RM0360)
+  // -----------------------------------------------------------------------------------------
+  
+  // (1) Ensure that ADRDY = 0
+  // (2) Clear ADRDY
+  // (3) Enable the ADC
+  // (4) Wait until ADC ready
+  
+  if(( ADC1->ISR & ADC_ISR_ADRDY ) != 0 )     // If ADC previously enabled and is ready,
+    ADC1->ISR |= ADC_ISR_ADRDY;               // then clear it by setting the bit.
 
-  // ====================
-  // Set up ADC Registers
-  //    ADC Channel: Ch2 / GPIO A1
-  // ====================
+  ADC1->CR |= ADC_CR_ADEN;                    // (Re)enable the ADC
+  while ((ADC1->ISR & ADC_ISR_ADRDY) == 0) ;  // Wait for the ADC to be enabled
 
-  // Set up Channel
+ 
+  // -----------------------------------------------------------------------------------------
+  // Single conversion sequence code example - Software trigger
+  // (Following Appendix A.7.6 in Reference Manual RM0360)
+  // -----------------------------------------------------------------------------------------
+  // (1) Select HSI14 by writing 00 in CKMODE (Default value, therefore not needed)
+  // (2) Select CHSEL4 for VRefInt
+  // (3) Select a sampling mode of 111 i.e. 239.5 ADC clk to be greater than 17.1 us
+  // (4) Wake-up the VREFINT (only for VBAT, Temp sensor and VRefInt) (not needed)
 
-
-  // Set Ch2 (GPIO A1) as first and only conversion
-  // Set SQ1[4:0] to 1 (0b00001)
-  ADC1->SQR3 |= ( 1U << ADC_SQR3_SQ1_Pos );
-
-  // The following line not needed since the default L is 1
-  // ADC1->SQR1 |= ( 0b0000 << ADC_SQR1_L_Pos );
-
-  // Set ADC Sample Time to 7.5 cycles. This seems to perform much
-  // better than the reset value of 1.5 cycles.
-  ADC1->SMPR2 |= ( 0b001 << ADC_SMPR2_SMP1_Pos );
-
-  // Enable ADC1 first time (standby until first conversion)
-  ADC1->CR2 |= ADC_CR2_ADON;
-
-  for( uint32_t x=0; x<7; x++) ;
-
-  // Initialize calibration registers
-  ADC1->CR2 |= ADC_CR2_RSTCAL;
-  while( ADC1->CR2 & ADC_CR2_RSTCAL ) ; // Wait until registers are initialized.
-
-  // Perform ADC Calibration
-  ADC1->CR2 |= ADC_CR2_CAL;
-  while ( ADC1->CR2 & ADC_CR2_CAL ) ;   // Wait until calibration is finished.
+  ADC1->CHSELR  =  ADC_CHSELR_CHSEL4;           // Select ADC channel 4 for conversion
+  ADC1->SMPR   |=  (0b111 << ADC_SMPR_SMP_Pos); // Select longest ADC sampling time
 
 
-  // ======================
-  // Set up Timer Registers
-  // ======================
-  // Set TIM2 Frequency to 4096, which is the ADC resolution + 1.
-  // The value read in by the ADC will determine the duty cycle, and
-  // will be loaded into TIM2->CCR1.
-  TIM2->ARR = 4096;
-
-  // Set TIM2/CH3 to PWM Mode 1 (OC1M[2:0] = 0b110)
-  TIM2->CCMR1 |=  ( TIM_CCMR1_OC1M_2 | TIM_CCMR1_OC1M_1 );
-
-  // Enable output on Timer 2 Channel 1 pin
-  TIM2->CCER |= TIM_CCER_CC1E;
-
-  // Finally, enable the clock counter (turn on the clock!)
-  TIM2->CR1 |= TIM_CR1_CEN;
-
+  // -----------------------------------------------------------------------------------------
   // Endless Loop
+  // -----------------------------------------------------------------------------------------
+  char istring[10];
+
   while( 1 )
   {
-    ADC1->CR2 |= ADC_CR2_ADON;            // Start ADC read...
-    for( uint32_t x=0 ; x<7; x++) ;       // Wait for approx. one conversion length
-    
-    while( !(ADC1->SR & ADC_SR_EOC )) ;   // Wait until conversion is complete.
-    
-    TIM2->CCR1 = (ADC1->DR & 0xFFFF)+1;   // Set TIM2 duty cycle to the ADC value + 1.
+    GPIOA->ODR ^= GPIO_ODR_5;                       // Toggle LED
+
+    // The following 3 lines are needed for every conversion:
+    ADC1->CR |= ADC_CR_ADSTART;                     // Initialize the ADC conversion
+    while(( ADC1->ISR & ADC_ISR_EOC ) == 0 ) ;      // Wait for the end of the conversion
+    uint16_t ADC_Result = ADC1->DR;                 // Get the result
+
+    itoa( ADC_Result, istring, 10 );                // Convert ADC value to a string
+    USART_puts( istring );                          // Output the string to the terminal
+
+    for( uint32_t x=0 ; x<(ADC_Result*100); x++) ;  // Pause according to the result of
+                                                    // the returned ADC value.
   }
 
 } // End main.c
