@@ -1,4 +1,4 @@
-# STM32F103-CMSIS-ADC-PWM-Example
+# STM32F030-CMSIS-ADC
 This project contains the bare minimum code required to demonstrate how to read an ADC input in order to control the blinking rate of an LED, and also
 outputs the ADC value out to a serial terminal via the USART if a USB serial dongle is used.<br>
 
